@@ -6,10 +6,11 @@ import type {
   ListenerEvent,
   SettingsParam,
   TmdbItem,
+  TorrentFile,
   TorrentItem,
 } from './types'
 
-export type { JQueryLike, SettingsParam, TmdbItem, TorrentItem } from './types'
+export type { JQueryLike, SettingsParam, TmdbItem, TorrentFile, TorrentItem } from './types'
 
 export class LampaError extends Error {}
 
@@ -260,6 +261,40 @@ export function waitTorrentList(
   })
 }
 
+export interface RenderedFile {
+  element: TorrentFile
+  item: JQueryLike
+}
+
+/**
+ * Ждёт список «Файлы» раздачи (Lampa.Listener 'torrent_file' / 'render') и отдаёт
+ * его файлы. TorrServer может грузить метаданные долго, отсюда большой таймаут.
+ */
+export function waitTorrentFiles(timeoutMs: number, settleMs = 300): Promise<RenderedFile[]> {
+  const listener = lampa().Listener
+  if (!listener || typeof listener.remove !== 'function') {
+    return Promise.reject(new LampaError('нет Lampa.Listener'))
+  }
+  return new Promise((resolve) => {
+    const files: RenderedFile[] = []
+    let settle: ReturnType<typeof setTimeout> | undefined
+    const done = (): void => {
+      clearTimeout(timer)
+      if (settle) clearTimeout(settle)
+      listener.remove?.('torrent_file', onEvent)
+      resolve(files)
+    }
+    const onEvent = (e: ListenerEvent): void => {
+      if (e.type !== 'render' || !e.element || !e.item) return
+      files.push({ element: e.element, item: e.item })
+      if (settle) clearTimeout(settle)
+      settle = setTimeout(done, settleMs)
+    }
+    const timer = setTimeout(done, timeoutMs)
+    listener.follow('torrent_file', onEvent)
+  })
+}
+
 /** Хэши запущенных раздач в порядке запуска (Lampa хранит их в torrents_view). */
 export function viewedTorrents(): string[] {
   let value = window.Lampa?.Storage?.get('torrents_view', '[]')
@@ -273,8 +308,8 @@ export function viewedTorrents(): string[] {
   return Array.isArray(value) ? value.map(String) : []
 }
 
-/** Нажать раздачу как OK на пульте: штатный запуск через TorrServer, история, отметка. */
-export function pressTorrent(rendered: RenderedTorrent): void {
+/** Нажать как OK на пульте: раздачу (TorrServer, история, отметка) или файл (плеер). */
+export function pressTorrent(rendered: { item: JQueryLike }): void {
   rendered.item.trigger('hover:enter')
 }
 

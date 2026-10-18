@@ -39,6 +39,15 @@ export interface JQueryLike {
   trigger(event: string): JQueryLike
 }
 
+/** Файл раздачи в списке «Файлы» (Lampa.Listener 'torrent_file'). */
+export interface TorrentFile {
+  title?: string
+  season?: number
+  episode?: number
+  timeline?: { percent?: number }
+  [key: string]: unknown
+}
+
 /** Событие Lampa.Listener 'torrent': экран торрентов отрисовал раздачу или её нажали. */
 export interface TorrentEvent {
   type?: string
@@ -60,8 +69,9 @@ export interface SettingsParam {
   onChange?: (value?: string) => void
 }
 
-export interface ListenerEvent extends TorrentEvent {
+export interface ListenerEvent extends Omit<TorrentEvent, 'element'> {
   name?: string
+  element?: TorrentItem & TorrentFile
 }
 
 export interface Listener {

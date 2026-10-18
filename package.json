@@ -1,6 +1,6 @@
 {
   "name": "alica-connector",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Плагин Lampa: управление голосом через навык Алисы «Лампа»",
   "private": true,
   "type": "module",

@@ -66,10 +66,30 @@ describe('torrents / play', () => {
   let reloads: number
   let settings: Record<string, unknown>
   let viewed: string[]
+  let fileLists: Record<string, { episode?: number; season?: number; percent?: number }[]>
+  let pressedFiles: string[]
 
   /** Фейковая Lampa: экран торрентов отрисовывает screens[n] для n-го открытия. */
   function fake(screens: TorrentItem[][]) {
     const listeners: ((e: ListenerEvent) => void)[] = []
+    const kinds = new Map<(e: ListenerEvent) => void, string>()
+    // Нажатие раздачи: Lampa (TorrServer) через время показывает список файлов.
+    const onPress = (title: string) => {
+      pressed.push(title)
+      const files = fileLists[title]
+      if (!files) return
+      setTimeout(() => {
+        files.forEach((f, i) => {
+          const name = f.episode ? `S${f.season || 1}E${f.episode}` : `file${i}`
+          const ev = {
+            type: 'render',
+            element: { Title: name, season: f.season || 1, episode: f.episode, timeline: { percent: f.percent || 0 } },
+            item: fakeItem(() => pressedFiles.push(name)),
+          }
+          for (const cb of listeners.filter((x) => kinds.get(x) === 'torrent_file')) cb(ev)
+        })
+      }, 20)
+    }
     let active: unknown = null
     let opened = 0
     const render = () => {
@@ -78,15 +98,21 @@ describe('torrents / play', () => {
       setTimeout(() => {
         for (const element of list) {
           if (active !== me) return
-          const ev = { type: 'render', element, item: fakeItem(() => pressed.push(element.Title)) }
-          for (const cb of [...listeners]) cb(ev)
+          const ev = { type: 'render', element, item: fakeItem(() => onPress(element.Title)) }
+          for (const cb of listeners.filter((x) => kinds.get(x) === 'torrent')) cb(ev)
         }
       }, 10)
     }
     const l: LampaGlobal = {
       Listener: {
-        follow: (_n, cb) => listeners.push(cb),
-        remove: (_n, cb) => listeners.splice(listeners.indexOf(cb), 1),
+        follow: (n, cb) => {
+          kinds.set(cb, n)
+          listeners.push(cb)
+        },
+        remove: (_n, cb) => {
+          const i = listeners.indexOf(cb)
+          if (i >= 0) listeners.splice(i, 1)
+        },
       },
       Storage: {
         get: (n, d) => (n === 'torrents_view' ? JSON.stringify(viewed) : d),
@@ -125,6 +151,8 @@ describe('torrents / play', () => {
     pressed = []
     reloads = 0
     viewed = []
+    fileLists = {}
+    pressedFiles = []
     // parse_timeout 0.05 c, чтобы тесты не ждали 15 секунд
     settings = { parser_use: true, parse_lang: 'df_year', parse_timeout: 0.05 }
     g.window.lampa_settings = { torrents_use: true }
@@ -194,5 +222,34 @@ describe('torrents / play', () => {
     l.Torserver = { url: () => '' }
     l.Platform = { is: (n) => n === 'android' }
     expect(await runAction('play', { query: 'дюна' })).toMatchObject({ ok: true })
+  })
+
+  const waitFiles = async () => {
+    for (let i = 0; i < 50 && !pressedFiles.length; i++) await new Promise((x) => setTimeout(x, 10))
+  }
+
+  it('play: сериал - последняя серия на 40% -> запускается она', async () => {
+    fileLists = { serial: [{ episode: 1, percent: 100 }, { episode: 2, percent: 40 }, { episode: 3 }] }
+    fake([[t('serial', 10)]])
+    await runAction('play', { query: 'дюна' })
+    await waitFiles()
+    expect(pressedFiles).toEqual(['S1E2'])
+    expect(notes[notes.length - 1]).toBe('Алиса: сезон 1, серия 2')
+  })
+
+  it('play: сериал - последняя серия досмотрена -> следующая', async () => {
+    fileLists = { serial: [{ episode: 1, percent: 100 }, { episode: 2, percent: 95 }, { episode: 3 }] }
+    fake([[t('serial', 10)]])
+    await runAction('play', { query: 'дюна' })
+    await waitFiles()
+    expect(pressedFiles).toEqual(['S1E3'])
+  })
+
+  it('play: фильм из одного файла запускается сразу', async () => {
+    fileLists = { movie: [{}] }
+    fake([[t('movie', 10)]])
+    await runAction('play', { query: 'дюна' })
+    await waitFiles()
+    expect(pressedFiles).toEqual(['file0'])
   })
 })
