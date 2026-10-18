@@ -1,6 +1,6 @@
 # AlicaConnector
 
-Плагин Lampa для голосового управления через навык Алисы «Лампа». Держит
+Плагин Lampa для голосового управления через навык Алисы «Лампа ТВ». Держит
 WebSocket-соединение с `lampa-alice-server` и выполняет команды через API
 Lampa. Описание проекта: `../PROJECT.md`.
 
@@ -9,13 +9,19 @@ Lampa. Описание проекта: `../PROJECT.md`.
 ## Установка на ТВ
 
 1. Lampa -> Настройки -> Расширения -> добавить плагин:
-   `https://<user>.github.io/alica-connector/alica-connector.js`
+   `https://toyotasx.github.io/alica-connector/alica-connector.js`
 2. Настройки -> AlicaConnector:
    - «Адрес сервера» - домен VPS (например, `lampa.example.com`; `wss://` и `/ws`
      подставятся сами). Если при сборке задан `ALICA_SERVER`, поле уже заполнено.
    - «Код привязки» - `PAIR_CODE` из `.env` сервера. Вводится один раз: сервер
      выдаёт токен, плагин хранит его в `Lampa.Storage`, код не сохраняется.
 3. Статус должен смениться на «Подключено».
+4. «Отвязать телевизор» стирает токен на ТВ; на сервере запись остаётся, её
+   удаляют вручную (README сервера).
+
+Lampa загружает плагин при каждом старте, поэтому обновление на ТВ -
+перезапуск Lampa (GitHub Pages кэширует файл до 10 минут). Версия видна в
+статусе настроек и в логе сервера (`online ... plugin=...`).
 
 ## Действия
 
@@ -57,13 +63,21 @@ Lampa. Описание проекта: `../PROJECT.md`.
 
 ```
 src/
-  index.ts      старт после app:ready, связывает всё вместе
-  settings.ts   раздел настроек: статус, адрес, код, «Отвязать»
-  socket.ts     WebSocket: pair/hello, команды, ping каждые 25 с,
-                переподключение 1-60 с, обнаружение «повисшего» соединения
-  protocol.ts   типы протокола, нормализация адреса сервера
-  lampa/        единственное место, где вызывается API Lampa
-  actions/      действия + реестр; match.ts - выбор фильма из результатов поиска
+  index.ts        старт после app:ready, связывает всё вместе
+  settings.ts     раздел настроек: статус, адрес, код, «Отвязать»
+  socket.ts       WebSocket: pair/hello, команды, ping каждые 25 с,
+                  переподключение 1-60 с, обнаружение «повисшего» соединения
+  protocol.ts     типы протокола, нормализация адреса сервера
+  lampa/          единственное место, где вызывается API Lampa
+    types.ts      используемая часть window.Lampa (всё необязательное)
+    index.ts      поиск, карточка, экран торрентов, события, нажатия
+  actions/        действия и реестр
+    open_card.ts, torrents.ts, play.ts
+    find.ts       поиск карточки по фразе (общий для всех действий)
+    match.ts      выбор фильма из результатов TMDB
+    quality.ts    выбор раздачи (последняя запущенная или верхняя), качество
+    episode.ts    выбор файла: фильм или нужная серия
+tests/            vitest с фейковым window.Lampa
 ```
 
 ## Разработка
@@ -77,8 +91,29 @@ npm run build
 
 Сборка: `dist/alica-connector.js`, один IIFE-файл, `target: chrome56`
 (Tizen 4). Для другого движка: `ALICA_TARGET=chrome47 npm run build`.
-Не используйте в коде то, чего esbuild не понижает до Chrome 56: регулярки
-с `\p{...}`, `Promise.prototype.finally`, `Array.prototype.flat`.
+
+Чего нельзя в коде (Chromium 56 на ТВ упадёт целиком или функция не сработает):
+
+- регулярки с `\p{...}` (Chrome 64+); `\b` не работает с кириллицей - русские
+  слова проверять без `\b`;
+- `Promise.prototype.finally`, `Array.prototype.flat`, `Array.prototype.at`;
+- синтаксис esbuild понижает сам (`?.`, `??`, `catch {}`, spread).
+
+После сборки полезно проверить: `node --check dist/alica-connector.js`.
+
+Проверка в настоящей Lampa без ТВ: веб-версия `http://lampa.mx` (Chrome
+переводит её на HTTPS и не открывает, поэтому её удобно отдавать через
+локальный прокси на `127.0.0.1`) + плагин через
+`Lampa.Utils.putScriptAsync([url])` в консоли + локальный сервер. Торренты
+включаются как в `etor`: `lampa_settings.torrents_use = true`, парсер
+`jackett` с адресом `jac.red`. TorrServer в браузере нет, поэтому
+`Lampa.Torrent.start` для проверки подменяют перехватом.
+
+API Lampa неофициальное. При обновлении Lampa сверять используемые вызовы с
+исходниками `yumata/lampa-source` нужной версии: `Api.search`, `Router.call`,
+`Activity.push/replace/active`, `SettingsApi`, `Listener` (`app`, `torrent`,
+`torrent_file`), `Storage` (`torrents_view`, `parse_lang`, `parse_timeout`,
+`parser_use`), `Torserver.url`.
 
 ## Публикация
 
