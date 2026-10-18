@@ -165,12 +165,25 @@ describe('torrents / play', () => {
     expect(await runAction('play', { query: 'дюна' })).toMatchObject({ ok: false, error: 'no_torrents' })
   })
 
-  it('play: ошибка парсера -> открываем экран торрентов', async () => {
+  it('play: парсер не ответил с первого раза -> повторная попытка', async () => {
+    let calls = 0
+    fake((ok, fail) => (++calls === 1 ? fail('Парсер не отвечает') : ok({ Results: [t('Dune 2021 1080p', 50)] })))
+    const r = await runAction('play', { query: 'дюна' })
+    expect(calls).toBe(2)
+    expect(r).toMatchObject({ ok: true, data: { quality: '1080p', seeds: 50 } })
+    expect(started).toHaveLength(1)
+  })
+
+  it('play: ошибка парсера дважды -> открываем экран торрентов с причиной', async () => {
     fake((_ok, fail) => fail('Укажите ссылку для парсинга: Jackett'))
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const r = await runAction('play', { query: 'дюна' })
     err.mockRestore()
-    expect(r).toMatchObject({ ok: true, data: { fallback: 'torrents' } })
+    expect(r).toMatchObject({
+      ok: true,
+      data: { fallback: 'torrents', reason: 'Укажите ссылку для парсинга: Jackett' },
+    })
+    expect(parserCalls).toHaveLength(2)
     expect(pushed[0]).toMatchObject({ component: 'torrents' })
     expect(started).toEqual([])
   })

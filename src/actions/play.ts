@@ -3,6 +3,18 @@ import { describe, findCard } from './find'
 import { chooseTorrent } from './quality'
 import type { Action } from './registry'
 
+// jac.red на первый запрос по фильму иногда не успевает за parse_timeout Lampa (15 с),
+// а повторный отдаёт быстро. Поэтому одна повторная попытка перед запасным вариантом.
+async function findWithRetry(movie: lampa.Movie): Promise<lampa.TorrentItem[]> {
+  try {
+    return await lampa.findTorrents(movie)
+  } catch (e) {
+    if (!(e instanceof lampa.ParserError)) throw e
+    lampa.noty('Алиса: парсер не ответил, пробую ещё раз')
+    return await lampa.findTorrents(movie)
+  }
+}
+
 export const play: Action = {
   name: 'play',
   async run(params) {
@@ -30,12 +42,13 @@ export const play: Action = {
 
     let items
     try {
-      items = await lampa.findTorrents(movie)
+      items = await findWithRetry(movie)
     } catch (e) {
-      // Парсер не настроен или не ответил: показываем штатный экран с его ошибкой.
+      // Парсер не настроен или не ответил дважды: показываем штатный экран с его ошибкой.
       console.error('AlicaConnector', 'parser', e)
       lampa.openTorrents(movie)
-      return { ok: true, data: { ...info, fallback: 'torrents' } }
+      const reason = String((e as Error)?.message || e).slice(0, 200)
+      return { ok: true, data: { ...info, fallback: 'torrents', reason } }
     }
 
     if (!items.length) {
