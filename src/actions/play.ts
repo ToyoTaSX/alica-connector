@@ -1,18 +1,11 @@
 import * as lampa from '../lampa'
 import { describe, findCard } from './find'
-import { chooseTorrent } from './quality'
+import { chooseTorrent, quality } from './quality'
 import type { Action } from './registry'
 
-// jac.red на первый запрос по фильму иногда не успевает за parse_timeout Lampa (15 с),
-// а повторный отдаёт быстро. Поэтому одна повторная попытка перед запасным вариантом.
-async function findWithRetry(movie: lampa.Movie): Promise<lampa.TorrentItem[]> {
-  try {
-    return await lampa.findTorrents(movie)
-  } catch (e) {
-    if (!(e instanceof lampa.ParserError)) throw e
-    lampa.noty('Алиса: парсер не ответил, пробую ещё раз')
-    return await lampa.findTorrents(movie)
-  }
+export const timing = {
+  // Запас сверх таймаута парсера: сам экран ещё строит список и фильтры.
+  extraWaitMs: 8000,
 }
 
 export const play: Action = {
@@ -36,42 +29,35 @@ export const play: Action = {
     }
     const movie = lampa.toMovie(pick.item)
     const info = { title: pick.title, year: pick.year, id: pick.item.id }
+    const wait = lampa.parserTimeout() + timing.extraWaitMs
 
-    lampa.openFull(pick.item)
+    // Штатный экран торрентов: поиск, сортировка и фильтр - как настроено в Lampa.
     lampa.noty(`Алиса: ищу раздачу для ${describe(pick)}`)
-
-    let items
-    try {
-      items = await findWithRetry(movie)
-    } catch (e) {
-      // Парсер не настроен или не ответил дважды: показываем штатный экран с его ошибкой.
-      console.error('AlicaConnector', 'parser', e)
-      lampa.openTorrents(movie)
-      const reason = String((e as Error)?.message || e).slice(0, 200)
-      return { ok: true, data: { ...info, fallback: 'torrents', reason } }
+    let list = await lampa.waitTorrentList(() => lampa.openTorrents(movie), wait)
+    if (!list.length) {
+      // Парсер (jac.red) иногда не успевает с первого раза, повтор обычно быстрый.
+      lampa.noty('Алиса: парсер не ответил, пробую ещё раз')
+      list = await lampa.waitTorrentList(() => lampa.reloadActivity(), wait)
     }
 
-    if (!items.length) {
+    const choice = chooseTorrent(list, lampa.viewedTorrents())
+    if (!choice) {
       lampa.noty(`Алиса: нет раздач для ${describe(pick)}`)
       return { ok: false, error: 'no_torrents', data: info }
     }
 
-    const choice = chooseTorrent(items, { year: pick.year })
-    if (!choice) {
-      lampa.noty(`Алиса: нет раздач 1080p и выше для ${describe(pick)}`)
-      return { ok: false, error: 'no_quality', data: info }
-    }
-
-    lampa.startTorrent(choice.item, movie)
-    lampa.noty(`Алиса: ${choice.quality}, ${choice.seeds} сидов`)
+    const element = choice.rendered.element
+    lampa.pressTorrent(choice.rendered)
+    lampa.noty(`Алиса: ${choice.last ? 'продолжаю' : 'запускаю'} ${element.Title}`.slice(0, 160))
     return {
       ok: true,
       data: {
         ...info,
-        quality: choice.quality,
-        seeds: choice.seeds,
-        tracker: choice.item.Tracker,
-        torrent: choice.item.Title,
+        choice: choice.last ? 'last' : 'top',
+        quality: quality(element.Title),
+        seeds: Number(element.Seeders) || 0,
+        tracker: element.Tracker,
+        torrent: element.Title,
       },
     }
   },

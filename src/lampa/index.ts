@@ -1,6 +1,13 @@
 // Адаптер к API Lampa. Остальной код плагина не обращается к window.Lampa напрямую.
 
-import type { LampaGlobal, SettingsParam, TmdbItem, TorrentItem } from './types'
+import type {
+  JQueryLike,
+  LampaGlobal,
+  ListenerEvent,
+  SettingsParam,
+  TmdbItem,
+  TorrentItem,
+} from './types'
 
 export type { JQueryLike, SettingsParam, TmdbItem, TorrentItem } from './types'
 
@@ -189,28 +196,86 @@ export function openTorrents(movie: Movie): void {
   })
 }
 
-export class ParserError extends Error {}
+/** Пересоздать текущий экран (экран торрентов заново запросит парсер). */
+export function reloadActivity(): void {
+  const activity = lampa().Activity
+  if (!activity || typeof activity.replace !== 'function') throw new LampaError('нет Lampa.Activity.replace')
+  activity.replace({})
+}
 
-/** Список раздач через парсер, выбранный в настройках Lampa. */
-export function findTorrents(movie: Movie, timeoutMs = 30000): Promise<TorrentItem[]> {
-  const parser = lampa().Parser
-  if (!parser || typeof parser.get !== 'function') {
-    return Promise.reject(new LampaError('нет Lampa.Parser.get'))
+/** Таймаут парсера из настроек Lampa, мс. */
+export function parserTimeout(): number {
+  const seconds = Number(setting('parse_timeout'))
+  return (Number.isFinite(seconds) && seconds > 0 ? seconds : 15) * 1000
+}
+
+export interface RenderedTorrent {
+  element: TorrentItem
+  item: JQueryLike
+}
+
+/**
+ * Выполняет open() и собирает раздачи, которые отрисует экран торрентов (событие
+ * Lampa.Listener 'torrent' / 'render'). Список считается готовым, когда события
+ * затихли на settleMs; пустой массив - за timeoutMs ничего не появилось.
+ */
+export function waitTorrentList(
+  open: () => void,
+  timeoutMs: number,
+  settleMs = 700,
+): Promise<RenderedTorrent[]> {
+  const l = lampa()
+  const listener = l.Listener
+  if (!listener || typeof listener.remove !== 'function') {
+    return Promise.reject(new LampaError('нет Lampa.Listener'))
   }
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new ParserError('timeout')), timeoutMs)
-    parser.get(
-      { ...torrentQuery(movie), movie, page: 1 },
-      (data) => {
-        clearTimeout(timer)
-        resolve(Array.isArray(data.Results) ? data.Results : [])
-      },
-      (error) => {
-        clearTimeout(timer)
-        reject(new ParserError(String(error || 'parser')))
-      },
-    )
+    const items: RenderedTorrent[] = []
+    let target: unknown
+    let settle: ReturnType<typeof setTimeout> | undefined
+    const done = (): void => {
+      clearTimeout(timer)
+      if (settle) clearTimeout(settle)
+      listener.remove?.('torrent', onEvent)
+      resolve(items)
+    }
+    const onEvent = (e: ListenerEvent): void => {
+      if (e.type !== 'render' || !e.element || !e.item) return
+      // Только раздачи экрана, который открыли мы.
+      if (target !== undefined && l.Activity?.active?.() !== target) return
+      items.push({ element: e.element, item: e.item })
+      if (settle) clearTimeout(settle)
+      settle = setTimeout(done, settleMs)
+    }
+    const timer = setTimeout(done, timeoutMs)
+    listener.follow('torrent', onEvent)
+    try {
+      open()
+      target = l.Activity?.active?.()
+    } catch (e) {
+      clearTimeout(timer)
+      listener.remove?.('torrent', onEvent)
+      reject(e)
+    }
   })
+}
+
+/** Хэши запущенных раздач в порядке запуска (Lampa хранит их в torrents_view). */
+export function viewedTorrents(): string[] {
+  let value = window.Lampa?.Storage?.get('torrents_view', '[]')
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      value = []
+    }
+  }
+  return Array.isArray(value) ? value.map(String) : []
+}
+
+/** Нажать раздачу как OK на пульте: штатный запуск через TorrServer, история, отметка. */
+export function pressTorrent(rendered: RenderedTorrent): void {
+  rendered.item.trigger('hover:enter')
 }
 
 /** Есть куда отдать раздачу: TorrServer в настройках или торрент-клиент Android. */
@@ -219,12 +284,4 @@ export function canStartTorrent(): boolean {
   if (!l?.Torrent) return false
   if (l.Platform?.is?.('android')) return true
   return Boolean(l.Torserver?.url?.())
-}
-
-/** Штатный запуск раздачи: TorrServer -> список файлов -> плеер (история и таймкоды Lampa). */
-export function startTorrent(item: TorrentItem, movie: Movie): void {
-  const torrent = lampa().Torrent
-  if (!torrent || typeof torrent.start !== 'function') throw new LampaError('нет Lampa.Torrent.start')
-  if (movie.img) item.poster = movie.img
-  torrent.start(item, movie)
 }

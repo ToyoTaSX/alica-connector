@@ -36,6 +36,14 @@ export interface JQueryLike {
   find(selector: string): JQueryLike
   text(value: string): JQueryLike
   toggleClass(name: string, state: boolean): JQueryLike
+  trigger(event: string): JQueryLike
+}
+
+/** Событие Lampa.Listener 'torrent': экран торрентов отрисовал раздачу или её нажали. */
+export interface TorrentEvent {
+  type?: string
+  element?: TorrentItem
+  item?: JQueryLike
 }
 
 export interface SettingsParam {
@@ -52,8 +60,13 @@ export interface SettingsParam {
   onChange?: (value?: string) => void
 }
 
+export interface ListenerEvent extends TorrentEvent {
+  name?: string
+}
+
 export interface Listener {
-  follow(event: string, cb: (e: { type?: string; name?: string }) => void): void
+  follow(event: string, cb: (e: ListenerEvent) => void): void
+  remove?(event: string, cb: (e: ListenerEvent) => void): void
 }
 
 export interface LampaGlobal {
@@ -73,17 +86,14 @@ export interface LampaGlobal {
     search(params: { query: string }, cb: (res: { movie?: TmdbList; tv?: TmdbList }) => void): void
     img?(src: string, size?: string): string
   }
-  Parser?: {
-    get(
-      params: Record<string, unknown>,
-      ok: (data: { Results?: TorrentItem[] }) => void,
-      fail: (error: string) => void,
-    ): void
-  }
   Torrent?: { start(element: TorrentItem, movie: Record<string, unknown>): void }
   Torserver?: { url?(): string }
   Router?: { call(name: string, data: Record<string, unknown>): void }
-  Activity?: { push(object: Record<string, unknown>): void }
+  Activity?: {
+    push(object: Record<string, unknown>): void
+    active?(): unknown
+    replace?(replace?: Record<string, unknown>): void
+  }
   Player?: { opened?(): boolean; close?(): void }
   Platform?: { get?(): string; is?(name: string): boolean }
 }

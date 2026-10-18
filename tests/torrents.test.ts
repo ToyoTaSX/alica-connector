@@ -1,104 +1,118 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { runAction } from '../src/actions'
-import { chooseTorrent, resolution } from '../src/actions/quality'
-import type { LampaGlobal, TmdbItem, TorrentItem } from '../src/lampa/types'
+import { timing } from '../src/actions/play'
+import { chooseTorrent, quality } from '../src/actions/quality'
+import type { RenderedTorrent } from '../src/lampa'
+import type { JQueryLike, LampaGlobal, ListenerEvent, TmdbItem, TorrentItem } from '../src/lampa/types'
 
 const g = globalThis as unknown as {
   window: { Lampa?: LampaGlobal; lampa_settings?: { torrents_use?: boolean } }
 }
 g.window = g.window || (globalThis as never)
 
-const t = (Title: string, Seeders: number, extra: Partial<TorrentItem> = {}): TorrentItem => ({
-  Title,
-  Seeders,
-  MagnetUri: 'magnet:?xt=urn:btih:' + Title.length,
-  ...extra,
-})
+function fakeItem(onEnter: () => void = () => {}): JQueryLike {
+  const item: JQueryLike = {
+    find: () => item,
+    text: () => item,
+    toggleClass: () => item,
+    trigger: (event) => {
+      if (event === 'hover:enter') onEnter()
+      return item
+    },
+  }
+  return item
+}
 
-describe('resolution', () => {
+const t = (Title: string, Seeders: number, hash = Title): TorrentItem => ({ Title, Seeders, hash })
+const r = (element: TorrentItem): RenderedTorrent => ({ element, item: fakeItem() })
+
+describe('quality', () => {
   it.each([
-    ['Dune (2021) WEB-DL 2160p HDR', 2160],
-    ['Дюна / Dune [2021, UHD BDRemux, HDR10]', 2160],
-    ['Dune 4K', 2160],
-    ['Дюна (2021) BDRip 1080p', 1080],
-    ['Dune 1080i HDTV', 1080],
-    ['Dune 720p', null],
-    ['Dune DVDRip', null],
-  ])('%s', (title, res) => expect(resolution(title)).toBe(res))
+    ['Dune (2021) WEB-DL 2160p HDR', '2160p'],
+    ['Интерстеллар 4K, HEVC, HDR', '2160p'],
+    ['Дюна (2021) BDRip 1080p', '1080p'],
+    ['Dune 1080i HDTV', '1080p'],
+    ['Dune 720p', '720p'],
+    ['Dune DVDRip', undefined],
+  ])('%s', (title, q) => expect(quality(title)).toBe(q))
 })
 
 describe('chooseTorrent', () => {
-  it('больше сидов среди 1080p+', () => {
-    const r = chooseTorrent([
-      t('Dune 2021 720p', 900),
-      t('Dune 2021 1080p', 120),
-      t('Dune 2021 2160p HDR', 340),
-    ])
-    expect(r).toMatchObject({ quality: '2160p', seeds: 340 })
+  it('без истории - верхняя', () => {
+    const list = [r(t('a', 5)), r(t('b', 900))]
+    expect(chooseTorrent(list, [])).toMatchObject({ last: false, rendered: { element: { Title: 'a' } } })
   })
 
-  it('без экранок и 3D', () => {
-    const r = chooseTorrent([
-      t('Dune 2021 CAMRip 1080p', 999),
-      t('Дюна 2021 1080p TS', 800),
-      t('Дюна 2021 1080p Экранка', 700),
-      t('Dune 2021 1080p 3D', 600),
-      t('Dune 2021 1080p WEB-DL', 10),
-    ])
-    expect(r?.item.Title).toBe('Dune 2021 1080p WEB-DL')
+  it('последняя запущенная важнее верхней', () => {
+    const list = [r(t('a', 5)), r(t('b', 900)), r(t('c', 1))]
+    expect(chooseTorrent(list, ['x', 'c', 'b'])).toMatchObject({ last: true, rendered: { element: { Title: 'b' } } })
+    expect(chooseTorrent(list, ['b', 'c'])).toMatchObject({ last: true, rendered: { element: { Title: 'c' } } })
   })
 
-  it('только Dolby Vision - пропускаем, гибрид DV+HDR10 - берём', () => {
-    expect(chooseTorrent([t('Dune 2160p DV', 500), t('Dune 1080p', 5)])?.item.Title).toBe('Dune 1080p')
-    expect(chooseTorrent([t('Dune 2160p HDR10, DV', 500), t('Dune 1080p', 5)])?.seeds).toBe(500)
-    expect(chooseTorrent([t('Dune 2160p DV', 500)], { skipDolbyVisionOnly: false })?.seeds).toBe(500)
-  })
-
-  it('другой год в названии - сиквел или ремейк', () => {
-    const r = chooseTorrent(
-      [t('Дюна: Часть вторая 2024 2160p', 999), t('Dune 1984 1080p', 500), t('Dune 2021 1080p', 50)],
-      { year: 2021 },
-    )
-    expect(r?.item.Title).toBe('Dune 2021 1080p')
-  })
-
-  it('нет ссылки - пропускаем; ничего не подошло - null', () => {
-    expect(chooseTorrent([t('Dune 1080p', 9, { MagnetUri: undefined })])).toBeNull()
-    expect(chooseTorrent([t('Dune 720p', 9)])).toBeNull()
+  it('пусто', () => {
+    expect(chooseTorrent([], ['a'])).toBeNull()
   })
 })
 
 const dune: TmdbItem = {
   id: 438631, title: 'Дюна', original_title: 'Dune', release_date: '2021-09-15',
-  vote_count: 12000, poster_path: '/p.jpg', genre_ids: [878],
+  vote_count: 12000, poster_path: '/p.jpg',
 }
 
 describe('torrents / play', () => {
   let pushed: Record<string, unknown>[]
-  let routed: Record<string, unknown>[]
-  let started: { item: TorrentItem; movie: Record<string, unknown> }[]
   let notes: string[]
-  let parserCalls: Record<string, unknown>[]
+  let pressed: string[]
+  let reloads: number
   let settings: Record<string, unknown>
+  let viewed: string[]
 
-  function fake(parser: (ok: (d: { Results: TorrentItem[] }) => void, fail: (e: string) => void) => void) {
+  /** Фейковая Lampa: экран торрентов отрисовывает screens[n] для n-го открытия. */
+  function fake(screens: TorrentItem[][]) {
+    const listeners: ((e: ListenerEvent) => void)[] = []
+    let active: unknown = null
+    let opened = 0
+    const render = () => {
+      const list = screens[opened++] || []
+      const me = active
+      setTimeout(() => {
+        for (const element of list) {
+          if (active !== me) return
+          const ev = { type: 'render', element, item: fakeItem(() => pressed.push(element.Title)) }
+          for (const cb of [...listeners]) cb(ev)
+        }
+      }, 10)
+    }
     const l: LampaGlobal = {
-      Storage: { get: () => '', set: () => {}, field: (n) => settings[n] },
+      Listener: {
+        follow: (_n, cb) => listeners.push(cb),
+        remove: (_n, cb) => listeners.splice(listeners.indexOf(cb), 1),
+      },
+      Storage: {
+        get: (n, d) => (n === 'torrents_view' ? JSON.stringify(viewed) : d),
+        set: () => {},
+        field: (n) => settings[n],
+      },
       Api: {
         search: (_p, cb) => setTimeout(() => cb({ movie: { results: [dune] }, tv: { results: [] } }), 0),
         img: (src) => 'https://img' + src,
       },
-      Parser: {
-        get: (params, ok, fail) => {
-          parserCalls.push(params)
-          parser(ok, fail)
-        },
-      },
-      Torrent: { start: (item, movie) => started.push({ item, movie }) },
+      Torrent: { start: () => {} },
       Torserver: { url: () => 'http://192.168.1.10:8090' },
       Platform: { is: () => false },
-      Router: { call: (name, data) => routed.push({ name, id: data.id }) },
-      Activity: { push: (o) => pushed.push(o) },
+      Activity: {
+        push: (o) => {
+          pushed.push(o)
+          active = o
+          render()
+        },
+        active: () => active,
+        replace: () => {
+          reloads++
+          active = { ...(active as object) }
+          render()
+        },
+      },
       Noty: { show: (x) => notes.push(x) },
     }
     g.window.Lampa = l
@@ -107,19 +121,20 @@ describe('torrents / play', () => {
 
   beforeEach(() => {
     pushed = []
-    routed = []
-    started = []
     notes = []
-    parserCalls = []
-    settings = { parser_use: true, parse_lang: 'df_year' }
+    pressed = []
+    reloads = 0
+    viewed = []
+    // parse_timeout 0.05 c, чтобы тесты не ждали 15 секунд
+    settings = { parser_use: true, parse_lang: 'df_year', parse_timeout: 0.05 }
     g.window.lampa_settings = { torrents_use: true }
+    timing.extraWaitMs = 0
   })
 
   it('torrents: открывает штатный экран с подготовленной карточкой', async () => {
-    fake(() => {})
-    const r = await runAction('torrents', { query: 'дюна' })
-    expect(r).toEqual({ ok: true, data: { title: 'Дюна', year: 2021, id: 438631 } })
-    expect(pushed).toHaveLength(1)
+    fake([[]])
+    const res = await runAction('torrents', { query: 'дюна' })
+    expect(res).toEqual({ ok: true, data: { title: 'Дюна', year: 2021, id: 438631 } })
     expect(pushed[0]).toMatchObject({
       component: 'torrents',
       search: 'Dune 2021',
@@ -130,72 +145,52 @@ describe('torrents / play', () => {
   })
 
   it('torrents: выключены в Lampa', async () => {
-    fake(() => {})
+    fake([])
     settings.parser_use = false
     expect(await runAction('torrents', { query: 'дюна' })).toEqual({ ok: false, error: 'torrents_disabled' })
   })
 
-  it('play: лучшая раздача уходит в Torrent.start', async () => {
-    fake((ok) => setTimeout(() => ok({ Results: [
-      t('Dune 2021 1080p', 120, { Tracker: 'rutracker' }),
-      t('Dune 2021 2160p HDR', 340, { Tracker: 'kinozal' }),
-      t('Dune 2021 720p', 999),
-    ] }), 0))
-    const r = await runAction('play', { query: 'дюна' })
-    expect(r).toMatchObject({
-      ok: true,
-      data: { title: 'Дюна', year: 2021, quality: '2160p', seeds: 340, tracker: 'kinozal' },
-    })
-    expect(routed).toEqual([{ name: 'full', id: 438631 }])
-    expect(started).toHaveLength(1)
-    expect(started[0].item.Title).toBe('Dune 2021 2160p HDR')
-    expect(started[0].item.poster).toBe('https://img/p.jpg')
-    expect(started[0].movie).toMatchObject({ id: 438631, genres: [] })
-    expect(parserCalls[0]).toMatchObject({ search: 'Dune 2021', movie: { id: 438631 } })
-  })
-
-  it('play: нет 1080p+ -> no_quality, ничего не запускаем', async () => {
-    fake((ok) => ok({ Results: [t('Dune 2021 720p', 999)] }))
-    expect(await runAction('play', { query: 'дюна' })).toMatchObject({ ok: false, error: 'no_quality' })
-    expect(started).toEqual([])
-  })
-
-  it('play: раздач нет', async () => {
-    fake((ok) => ok({ Results: [] }))
-    expect(await runAction('play', { query: 'дюна' })).toMatchObject({ ok: false, error: 'no_torrents' })
-  })
-
-  it('play: парсер не ответил с первого раза -> повторная попытка', async () => {
-    let calls = 0
-    fake((ok, fail) => (++calls === 1 ? fail('Парсер не отвечает') : ok({ Results: [t('Dune 2021 1080p', 50)] })))
-    const r = await runAction('play', { query: 'дюна' })
-    expect(calls).toBe(2)
-    expect(r).toMatchObject({ ok: true, data: { quality: '1080p', seeds: 50 } })
-    expect(started).toHaveLength(1)
-  })
-
-  it('play: ошибка парсера дважды -> открываем экран торрентов с причиной', async () => {
-    fake((_ok, fail) => fail('Укажите ссылку для парсинга: Jackett'))
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const r = await runAction('play', { query: 'дюна' })
-    err.mockRestore()
-    expect(r).toMatchObject({
-      ok: true,
-      data: { fallback: 'torrents', reason: 'Укажите ссылку для парсинга: Jackett' },
-    })
-    expect(parserCalls).toHaveLength(2)
+  it('play: открывает экран торрентов и нажимает верхнюю раздачу', async () => {
+    fake([[t('Dune 2021 2160p HDR', 340), t('Dune 2021 1080p', 900)]])
+    const res = await runAction('play', { query: 'дюна' })
     expect(pushed[0]).toMatchObject({ component: 'torrents' })
-    expect(started).toEqual([])
+    expect(pressed).toEqual(['Dune 2021 2160p HDR'])
+    expect(res).toMatchObject({
+      ok: true,
+      data: { title: 'Дюна', choice: 'top', quality: '2160p', seeds: 340 },
+    })
+  })
+
+  it('play: нажимает последнюю запущенную раздачу', async () => {
+    viewed = ['Dune 2021 1080p']
+    fake([[t('Dune 2021 2160p HDR', 340), t('Dune 2021 1080p', 900)]])
+    const res = await runAction('play', { query: 'дюна' })
+    expect(pressed).toEqual(['Dune 2021 1080p'])
+    expect(res).toMatchObject({ ok: true, data: { choice: 'last', quality: '1080p' } })
+  })
+
+  it('play: пустой экран -> перезагрузка и вторая попытка', async () => {
+    fake([[], [t('Dune 2021 1080p', 50)]])
+    const res = await runAction('play', { query: 'дюна' })
+    expect(reloads).toBe(1)
+    expect(pressed).toEqual(['Dune 2021 1080p'])
+    expect(res).toMatchObject({ ok: true, data: { seeds: 50 } })
+  })
+
+  it('play: дважды пусто -> no_torrents, ничего не нажато', async () => {
+    fake([[], []])
+    expect(await runAction('play', { query: 'дюна' })).toMatchObject({ ok: false, error: 'no_torrents' })
+    expect(pressed).toEqual([])
   })
 
   it('play: нет TorrServer', async () => {
-    const l = fake(() => {})
+    const l = fake([])
     l.Torserver = { url: () => '' }
     expect(await runAction('play', { query: 'дюна' })).toEqual({ ok: false, error: 'no_torrserver' })
   })
 
   it('play: на Android TorrServer не обязателен', async () => {
-    const l = fake((ok) => ok({ Results: [t('Dune 2021 1080p', 5)] }))
+    const l = fake([[t('Dune 2021 1080p', 5)]])
     l.Torserver = { url: () => '' }
     l.Platform = { is: (n) => n === 'android' }
     expect(await runAction('play', { query: 'дюна' })).toMatchObject({ ok: true })
