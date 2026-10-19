@@ -11,12 +11,25 @@ export interface TmdbItem {
   first_air_date?: string
   popularity?: number
   vote_count?: number
+  vote_average?: number
+  genre_ids?: number[]
+  poster_path?: string
   source?: string
   [key: string]: unknown
 }
 
 export interface TmdbList {
   results?: TmdbItem[]
+}
+
+/** Lampa.Api.sources.tmdb: запросы к TMDB через прокси и язык Lampa. */
+export interface TmdbSource {
+  get(
+    method: string,
+    params: Record<string, unknown>,
+    ok: (json: TmdbList) => void,
+    error?: () => void,
+  ): void
 }
 
 /** Раздача из Lampa.Parser.get (Jackett/Prowlarr/TorrServer). */
@@ -95,7 +108,15 @@ export interface LampaGlobal {
   Api?: {
     search(params: { query: string }, cb: (res: { movie?: TmdbList; tv?: TmdbList }) => void): void
     img?(src: string, size?: string): string
+    sources?: { tmdb?: TmdbSource }
   }
+  /** Закладки и история (категории history, like, book, wath, viewed, thrown...). */
+  Favorite?: {
+    get(params: { type: string }): TmdbItem[]
+    listener?: { follow(event: string, cb: (e: { where?: string }) => void): void }
+  }
+  /** Прогресс просмотра: фильм - процент, сериал - число серий с прогрессом. */
+  Timeline?: { watched?(card: TmdbItem): number }
   Torrent?: { start(element: TorrentItem, movie: Record<string, unknown>): void }
   Torserver?: { url?(): string }
   Router?: { call(name: string, data: Record<string, unknown>): void }

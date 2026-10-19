@@ -320,3 +320,72 @@ export function canStartTorrent(): boolean {
   if (l.Platform?.is?.('android')) return true
   return Boolean(l.Torserver?.url?.())
 }
+
+/** Значение из Lampa.Storage, сохранённое как JSON (Storage.set сам делает stringify). */
+export function storageJson<T>(name: string, fallback: T): T {
+  let value = window.Lampa?.Storage?.get(name, '')
+  if (typeof value === 'string') {
+    if (!value) return fallback
+    try {
+      value = JSON.parse(value)
+    } catch {
+      return fallback
+    }
+  }
+  return value === undefined || value === null ? fallback : (value as T)
+}
+
+export function storageSetJson(name: string, value: unknown): void {
+  window.Lampa?.Storage?.set(name, value)
+}
+
+/** Карточки из закладок Lampa (новые первыми): history, like, book, wath, viewed, thrown. */
+export function favorites(type: string): TmdbItem[] {
+  try {
+    const list = window.Lampa?.Favorite?.get({ type })
+    return Array.isArray(list) ? list : []
+  } catch {
+    return []
+  }
+}
+
+/** Изменились закладки или история (добавили карточку). */
+export function onFavoriteAdd(cb: (where: string) => void): void {
+  window.Lampa?.Favorite?.listener?.follow('add', (e) => cb(String(e?.where || '')))
+}
+
+/** Прогресс просмотра: фильм - процент, сериал - число серий с прогрессом. */
+export function watched(card: TmdbItem): number {
+  try {
+    return Number(window.Lampa?.Timeline?.watched?.(card)) || 0
+  } catch {
+    return 0
+  }
+}
+
+/** Запрос к TMDB через источник Lampa, например «movie/27205/recommendations». */
+export function tmdb(
+  method: string,
+  params: Record<string, unknown> = {},
+  timeoutMs = 10000,
+): Promise<TmdbItem[]> {
+  const source = window.Lampa?.Api?.sources?.tmdb
+  if (!source || typeof source.get !== 'function') {
+    return Promise.reject(new LampaError('нет Lampa.Api.sources.tmdb'))
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new LampaError('tmdb timeout')), timeoutMs)
+    source.get(
+      method,
+      params,
+      (json) => {
+        clearTimeout(timer)
+        resolve(Array.isArray(json?.results) ? json.results : [])
+      },
+      () => {
+        clearTimeout(timer)
+        reject(new LampaError(`tmdb error ${method}`))
+      },
+    )
+  })
+}

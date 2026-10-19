@@ -1,7 +1,9 @@
 import * as lampa from '../lampa'
 import { chooseFile } from './episode'
 import { describe, findCard } from './find'
+import type { Pick } from './match'
 import { chooseTorrent, quality } from './quality'
+import { lastRecommended } from './recommend'
 import type { Action } from './registry'
 
 export const timing = {
@@ -33,8 +35,10 @@ async function pressFile(files: Promise<lampa.RenderedFile[]>): Promise<void> {
 export const play: Action = {
   name: 'play',
   async run(params) {
+    // {recommended: true} - «давай» после «посоветуй»: последняя рекомендация.
+    const recommended = params.recommended === true
     const query = String(params.query || '').trim()
-    if (!query) return { ok: false, error: 'bad_params' }
+    if (!query && !recommended) return { ok: false, error: 'bad_params' }
     if (!lampa.torrentsEnabled()) {
       lampa.noty('Алиса: торренты в Lampa выключены')
       return { ok: false, error: 'torrents_disabled' }
@@ -44,10 +48,10 @@ export const play: Action = {
       return { ok: false, error: 'no_torrserver' }
     }
 
-    const pick = await findCard(query)
+    const pick: Pick | null = recommended ? lastRecommended() : await findCard(query)
     if (!pick) {
-      lampa.noty(`Алиса: не нашла «${query}»`)
-      return { ok: false, error: 'not_found' }
+      lampa.noty(recommended ? 'Алиса: нечего запускать' : `Алиса: не нашла «${query}»`)
+      return { ok: false, error: recommended ? 'nothing_recommended' : 'not_found' }
     }
     const movie = lampa.toMovie(pick.item)
     const info = { title: pick.title, year: pick.year, id: pick.item.id }

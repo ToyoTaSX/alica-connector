@@ -1,6 +1,6 @@
 // AlicaConnector: плагин Lampa, выполняет голосовые команды навыка Алисы «Лампа».
 
-import { actionNames, runAction } from './actions'
+import { actionNames, initRecommendations, runAction } from './actions'
 import * as lampa from './lampa'
 import { normalizeServerUrl } from './protocol'
 import { initSettings, KEY_SERVER, KEY_TOKEN, showStatus, STATUS_TEXT } from './settings'
@@ -41,6 +41,7 @@ function start(): void {
 
   initSettings(conn, __VERSION__, __DEFAULT_SERVER__)
   conn.start()
+  initRecommendations()
 }
 
 if (!window.alica_connector_loaded) {
